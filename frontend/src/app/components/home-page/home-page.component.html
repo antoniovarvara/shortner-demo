@@ -1,0 +1,22 @@
+<div class="center">
+  <mat-card style="justify-content: center">
+    <mat-card-title>
+      Generate your short URL
+    </mat-card-title>
+
+    <mat-card-content>
+      <mat-form-field appearance="fill">
+        <mat-label>Insert a valid URL</mat-label>
+        <input matInput placeholder="www.google.com" [formControl]="urlControl" required>
+        <mat-error *ngIf="urlControl.invalid">{{getErrorMessage()}}</mat-error>
+      </mat-form-field>
+      <button style="margin: 8px;" mat-raised-button mat-button color="primary" [disabled]="!enableUrlGeneration()" (click)="createNewUrl()" >Generate</button>
+      <div *ngIf="createdUrl !== null && createdUrl !== undefined">
+        <h3>Generated URL:</h3> 
+        <div style="cursor: pointer" class="table-cell">
+          <a matTooltip="Open link" (click)="redirect()">{{createdUrl}}</a>
+        </div>
+      </div>
+    </mat-card-content>
+  </mat-card>
+</div>

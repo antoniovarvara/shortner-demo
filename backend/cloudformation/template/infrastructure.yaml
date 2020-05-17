@@ -1,0 +1,211 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Shorter demo
+
+Parameters:
+  PROJECT:
+    Description: Name of the project
+    Type: String
+    Default: shortnerdemo
+  ENV:
+    Description: Name of the Environment
+    Type: String
+    Default: dev
+  LAMBDAPACAKGE:
+    Type: String
+    Default: webapi.zip
+
+
+Resources:
+
+  SinglePageApplicationBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${PROJECT}-${ENV}-${AWS::Region}-s3-spa-frontend
+      WebsiteConfiguration:
+        ErrorDocument: index.html
+        IndexDocument: index.html
+
+  SinglePageApplicationBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SinglePageApplicationBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowPublicAccess
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub arn:aws:s3:::${SinglePageApplicationBucket}/*
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${PROJECT}-${ENV}-role-lambda
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - !Ref LambdaRolePolicy
+
+  LambdaRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${PROJECT}-${ENV}-policy-lambda
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - dynamodb:*
+            Resource:
+              - !GetAtt ShortResourceTable.Arn
+            Effect: Allow
+          - Action:
+            - lambda:GetAccountSettings
+            Resource:
+              - "*"
+            Effect: Allow
+          - Action:
+            - logs:*
+            Resource:
+              - "*"
+            Effect: Allow
+
+  ShortResourceTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${PROJECT}_${ENV}_ddb_registered_urls
+      AttributeDefinitions:
+        - AttributeName: resourceId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: resourceId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: 'ttl'
+        Enabled: TRUE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  BackendApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref ENV
+      Cors:
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Authorization,Content-Type'"
+      DefinitionBody:
+        swagger: 2.0
+        info:
+          title: !Join [ '-', [ !Ref PROJECT, !Ref ENV, apigw-backend] ]
+        paths:
+          /shortUrl:
+            post:
+              produces:
+                - application/json
+              x-amazon-apigateway-integration:
+                type: "aws_proxy"
+                httpMethod: "POST"
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations
+          /shortUrl/{resourceId}:
+            get:
+              produces:
+                - application/json
+              parameters:
+                - name: resourceId
+                  in: path
+                  required: true
+                  type: string
+              x-amazon-apigateway-integration:
+                type: "aws_proxy"
+                httpMethod: "POST"
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations
+
+  RedirectApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref ENV
+      Cors:
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Authorization,Content-Type'"
+      DefinitionBody:
+        swagger: 2.0
+        info:
+          title: !Join [ '-', [ !Ref PROJECT, !Ref ENV, apigw-redirect] ]
+        paths:
+          /{resourceId}:
+            get:
+              produces:
+                - application/json
+              parameters:
+                - name: resourceId
+                  in: path
+                  required: true
+                  type: string
+              x-amazon-apigateway-integration:
+                type: "aws_proxy"
+                httpMethod: "POST"
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RedirectLambda.Arn}/invocations
+
+  RedirectLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: webapi::LambdaFunction.Function::FunctionHandler
+      Runtime: dotnetcore3.1
+      CodeUri:
+        Bucket: avarvara-dp-backend
+        Key: !Sub shortner-demo/data-artifacts/${LAMBDAPACAKGE}
+      Role: !GetAtt LambdaRole.Arn
+      FunctionName: !Sub ${PROJECT}_${ENV}_lambda_api_redirect
+      Timeout: 300 # 5 minutes
+      MemorySize: 2048
+      Environment:
+        Variables:
+          DYNAMO_TABLE: !Ref ShortResourceTable
+          ERROR_URL: !GetAtt SinglePageApplicationBucket.WebsiteURL
+      Events:
+        redirect:
+          Type: Api
+          Properties:
+            Path: /{resourceId}
+            Method: GET
+            RestApiId: !Ref RedirectApi
+
+  BackendLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: webapi::LambdaFunction.Function::FunctionHandler
+      Runtime: dotnetcore3.1
+      CodeUri:
+        Bucket: avarvara-dp-backend
+        Key: !Sub shortner-demo/data-artifacts/${LAMBDAPACAKGE}
+      Role: !GetAtt LambdaRole.Arn
+      FunctionName: !Sub ${PROJECT}_${ENV}_lambda_api
+      Timeout: 300 # 5 minutes
+      MemorySize: 2048
+      Environment:
+        Variables:
+          DYNAMO_TABLE: !Ref ShortResourceTable
+          ENV: !Ref ENV
+          REDIRECT_API: !Ref RedirectApi
+      Events:
+        CreateShortUrl:
+          Type: Api
+          Properties:
+            Path: /shortUrl
+            Method: POST
+            RestApiId: !Ref BackendApi
+        GetShortUrl:
+          Type: Api
+          Properties:
+            Path: /shortUrl/{resourceId}
+            Method: GET
+            RestApiId: !Ref BackendApi
